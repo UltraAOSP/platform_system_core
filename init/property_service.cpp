@@ -41,6 +41,7 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <private/android_filesystem_config.h>
 
 #include <selinux/selinux.h>
@@ -54,6 +55,7 @@
 #include "init.h"
 #include "util.h"
 #include "log.h"
+#include "vendor_init.h"
 
 #define PERSISTENT_PROPERTY_DIR  "/data/property"
 #define FSTAB_PREFIX "/fstab."
@@ -117,6 +119,31 @@ std::string property_get(const char* name) {
     char value[PROP_VALUE_MAX] = {0};
     __system_property_get(name, value);
     return value;
+}
+
+bool property_get_bool(const char *key, bool default_value) {
+    if (!key) {
+        return default_value;
+    }
+
+    bool result = default_value;
+
+    std::string string_value = property_get(key);
+    if ((string_value == "0")
+            || (string_value == "n")
+            || (string_value == "no")
+            || (string_value == "false")
+            || (string_value == "off")) {
+        result = false;
+    } else if ((string_value == "1")
+            || (string_value == "y")
+            || (string_value == "yes")
+            || (string_value == "true")
+            || (string_value == "on")) {
+        result = true;
+    }
+
+    return result;
 }
 
 static void write_persistent_property(const char *name, const char *value)
@@ -468,6 +495,22 @@ static void load_override_properties() {
     }
 }
 
+static int check_rlim_action() {
+    std::string value ;
+    struct rlimit rl;
+    value = property_get("persist.debug.trace");
+    const char* pval = value.c_str();
+
+    if((strcmp(pval,"1") == 0)) {
+        rl.rlim_cur = RLIM_INFINITY;
+        rl.rlim_max = RLIM_INFINITY;
+        if (setrlimit(RLIMIT_CORE, &rl) < 0) {
+            ERROR("could not enable core file generation");
+        }
+    }
+    return 0;
+}
+
 /* When booting an encrypted system, /data is not mounted when the
  * property service is started, so any properties stored there are
  * not loaded.  Vold triggers init to load these properties once it
@@ -477,6 +520,8 @@ void load_persist_props(void) {
     load_override_properties();
     /* Read persistent properties after all default values have been loaded. */
     load_persistent_properties();
+    /*check for coredump*/
+    check_rlim_action();
 }
 
 void load_recovery_id_prop() {
@@ -521,6 +566,12 @@ void load_system_props() {
     load_properties_from_file(PROP_PATH_SYSTEM_BUILD, NULL);
     load_properties_from_file(PROP_PATH_VENDOR_BUILD, NULL);
     load_properties_from_file(PROP_PATH_FACTORY, "ro.*");
+
+    /* update with vendor-specific property runtime
+     * overrides
+     */
+    vendor_load_properties();
+
     load_recovery_id_prop();
 }
 
